@@ -345,6 +345,10 @@ export {
   STACKABLE_SETTINGS,
   TOOLTIP_SETTINGS,
 } from "./lib/settings/graph";
+export {
+  getLegendPositionSetting,
+  LEGEND_POSITION_SETTINGS,
+} from "./lib/settings/legend";
 export { nestedSettings } from "./lib/settings/nested";
 export { keyForSingleSeries } from "./lib/settings/series";
 export { getStackOffset } from "./lib/settings/stacking";
@@ -434,8 +438,8 @@ export {
 export {
   getDefaultPercentVisibility,
   getDefaultPieColumns,
+  getDefaultLegendPosition,
   getDefaultShowLabels,
-  getDefaultShowLegend,
   getDefaultShowTotal,
   getDefaultSliceThreshold,
   getDefaultSortRows,
