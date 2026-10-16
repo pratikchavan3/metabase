@@ -16,7 +16,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { usePrevious } from "react-use";
+import { useLatest, usePrevious } from "react-use";
 
 import { Markdown } from "metabase/common/components/Markdown";
 import { Box, type BoxProps } from "metabase/ui";
@@ -28,6 +28,8 @@ export type EditableTextAttributes = Omit<
   "style" | "onChange" | "onFocus" | "onBlur"
 >;
 
+type EditableTextChangeResult = void | boolean | Promise<void | boolean>;
+
 export interface EditableTextProps extends BoxProps, EditableTextAttributes {
   initialValue?: string | null;
   placeholder?: string;
@@ -38,7 +40,12 @@ export interface EditableTextProps extends BoxProps, EditableTextAttributes {
   isDisabled?: boolean;
   isMarkdown?: boolean;
   as?: keyof JSX.IntrinsicElements;
-  onChange?: (value: string) => void;
+  /**
+   * Called with the edited text on blur or Enter when the text changed. Return
+   * or resolve to `false` when the value is not saved, and the text goes back
+   * to `initialValue`.
+   */
+  onChange?: (value: string) => EditableTextChangeResult;
   onContentChange?: (value: string) => void;
   onFocus?: FocusEventHandler<HTMLTextAreaElement>;
   onBlur?: FocusEventHandler<HTMLTextAreaElement>;
@@ -73,12 +80,26 @@ export const EditableText = forwardRef(function EditableText(
   const submitOnBlur = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const previousInitialValue = usePrevious(initialValue);
+  const latestInitialValue = useLatest(initialValue);
 
   useEffect(() => {
     if (initialValue != null && initialValue !== previousInitialValue) {
       setInputValue(initialValue);
     }
   }, [initialValue, previousInitialValue]);
+
+  const submit = useCallback(
+    async (value: string) => {
+      setSubmitValue(value);
+      const isSaved = await onChange?.(value);
+      if (isSaved === false) {
+        const savedValue = latestInitialValue.current ?? "";
+        setInputValue(savedValue);
+        setSubmitValue(savedValue);
+      }
+    },
+    [onChange, latestInitialValue],
+  );
 
   useEffect(() => {
     if (!isMarkdown) {
@@ -97,13 +118,12 @@ export const EditableText = forwardRef(function EditableText(
       if (!isOptional && !inputValue && submitValue) {
         setInputValue(submitValue);
       } else if (inputValue !== submitValue && submitOnBlur.current) {
-        setSubmitValue(inputValue);
-        onChange?.(inputValue);
+        submit(inputValue);
       }
 
       onBlur?.(event);
     },
-    [inputValue, submitValue, isOptional, onChange, onBlur, setIsInFocus],
+    [inputValue, submitValue, isOptional, submit, onBlur, setIsInFocus],
   );
 
   const handleChange = useCallback(

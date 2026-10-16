@@ -1,6 +1,7 @@
 import userEvent from "@testing-library/user-event";
 
-import { fireEvent, render, screen, waitFor } from "__support__/ui";
+import { act, fireEvent, render, screen, waitFor } from "__support__/ui";
+import { defer } from "metabase/utils/promise";
 
 import type { EditableTextProps } from "./EditableText";
 import { EditableText } from "./EditableText";
@@ -106,5 +107,86 @@ describe("EditableText", () => {
     const textarea = await screen.findByRole("textbox");
     expect(textarea).toHaveFocus();
     expect(textarea).toHaveTextContent(/^original description$/);
+  });
+
+  describe("when the change is not saved", () => {
+    it("shows the initial value again and submits the same text on retry", async () => {
+      const onChange = jest.fn((_value: string) => false);
+      setup({ initialValue: "Saved", onChange });
+
+      const input = screen.getByRole("textbox");
+      await userEvent.clear(input);
+      await userEvent.type(input, "Draft");
+      await userEvent.tab();
+
+      expect(onChange).toHaveBeenCalledWith("Draft");
+      await waitFor(() => expect(input).toHaveValue("Saved"));
+
+      await userEvent.clear(input);
+      await userEvent.type(input, "Draft");
+      await userEvent.tab();
+
+      expect(onChange).toHaveBeenCalledTimes(2);
+      expect(onChange).toHaveBeenNthCalledWith(2, "Draft");
+      await waitFor(() => expect(input).toHaveValue("Saved"));
+    });
+
+    it("restores the initial value on Escape after a rejected change", async () => {
+      setup({ initialValue: "Saved", onChange: () => false });
+
+      const input = screen.getByRole("textbox");
+      await userEvent.clear(input);
+      await userEvent.type(input, "Draft");
+      await userEvent.tab();
+      await waitFor(() => expect(input).toHaveValue("Saved"));
+
+      await userEvent.type(input, " edit{Escape}");
+
+      expect(input).toHaveValue("Saved");
+    });
+
+    it("does not submit again on blur when there is no initial value", async () => {
+      const onChange = jest.fn((_value: string) => false);
+      setup({ initialValue: null, isOptional: true, onChange });
+
+      const input = screen.getByRole("textbox");
+      await userEvent.type(input, "Draft");
+      await userEvent.tab();
+      await waitFor(() => expect(input).toHaveValue(""));
+
+      await userEvent.click(input);
+      await userEvent.tab();
+
+      expect(onChange).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the text until the save resolves", async () => {
+      const save = defer<boolean>();
+      setup({ initialValue: "Saved", onChange: () => save.promise });
+
+      const input = screen.getByRole("textbox");
+      await userEvent.clear(input);
+      await userEvent.type(input, "Draft");
+      await userEvent.tab();
+
+      expect(input).toHaveValue("Draft");
+
+      await act(async () => save.resolve(false));
+
+      expect(input).toHaveValue("Saved");
+    });
+  });
+
+  it("keeps the submitted text when onChange returns nothing", async () => {
+    const onChange = jest.fn((_value: string) => undefined);
+    setup({ initialValue: "Saved", onChange });
+
+    const input = screen.getByRole("textbox");
+    await userEvent.clear(input);
+    await userEvent.type(input, "Draft");
+    await userEvent.tab();
+
+    expect(onChange).toHaveBeenCalledWith("Draft");
+    expect(input).toHaveValue("Draft");
   });
 });

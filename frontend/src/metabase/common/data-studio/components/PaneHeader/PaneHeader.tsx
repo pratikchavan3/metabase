@@ -1,7 +1,10 @@
 import type { ReactNode } from "react";
 import { t } from "ttag";
 
-import { EditableText } from "metabase/common/components/EditableText";
+import {
+  EditableText,
+  type EditableTextProps,
+} from "metabase/common/components/EditableText";
 import { AppSwitcher } from "metabase/nav/components/AppSwitcher";
 import {
   Box,
@@ -89,7 +92,7 @@ type PaneHeaderInputProps = {
   isOptional?: boolean;
   readOnly?: boolean;
   "data-testid"?: string;
-  onChange?: (value: string) => void;
+  onChange?: EditableTextProps["onChange"];
   onContentChange?: (value: string) => void;
 };
 

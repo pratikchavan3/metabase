@@ -84,10 +84,19 @@ function setup({
   return { router: checkNotNull(router) };
 }
 
-function getLastUpdateBody(): unknown {
-  return fetchMock.callHistory.lastCall("path:/api/dashboard/10", {
+function getUpdateCalls() {
+  return fetchMock.callHistory.calls("path:/api/dashboard/10", {
     method: "PUT",
-  })?.options.body;
+  });
+}
+
+function getLastUpdateBody(): unknown {
+  return getUpdateCalls().at(-1)?.options.body;
+}
+
+async function startEditingDescription(): Promise<HTMLElement> {
+  await userEvent.click(await screen.findByTestId("editable-text"));
+  return screen.getByTestId("dashboard-description-input");
 }
 
 describe("DashboardInfo", () => {
@@ -169,6 +178,15 @@ describe("DashboardInfo", () => {
       expect(router.location.pathname).toBe("/dashboard/10");
     });
 
+    // Cache configs are not synced to git, so the server allows them in read-only mode
+    it("stays editable when remote sync is read-only", async () => {
+      setup({ isRemoteSyncReadOnly: true });
+
+      expect(
+        await screen.findByRole("button", { name: "Caching policy" }),
+      ).toBeInTheDocument();
+    });
+
     it("is read-only for a dashboard in the trash", async () => {
       setup({
         dashboard: createMockDashboard({
@@ -203,6 +221,122 @@ describe("DashboardInfo", () => {
 
       expect(await screen.findByText("Auto-apply filters")).toBeInTheDocument();
       expect(screen.queryByText("Caching policy")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("description", () => {
+    it("saves the new description", async () => {
+      setup({
+        dashboard: createMockDashboard({ id: 10, description: "Old" }),
+      });
+
+      const input = await startEditingDescription();
+      await userEvent.clear(input);
+      await userEvent.type(input, "New");
+      await userEvent.tab();
+
+      await waitFor(() =>
+        expect(getLastUpdateBody()).toBe(
+          JSON.stringify({ description: "New" }),
+        ),
+      );
+    });
+
+    it("clears the description when it is emptied", async () => {
+      setup({
+        dashboard: createMockDashboard({ id: 10, description: "Old" }),
+      });
+
+      await userEvent.clear(await startEditingDescription());
+      await userEvent.tab();
+
+      await waitFor(() =>
+        expect(getLastUpdateBody()).toBe(JSON.stringify({ description: null })),
+      );
+    });
+
+    it("does not save a change that only adds whitespace", async () => {
+      setup({
+        dashboard: createMockDashboard({ id: 10, description: "Old" }),
+      });
+
+      await userEvent.type(await startEditingDescription(), "  ");
+      await userEvent.tab();
+
+      expect(await screen.findByText("Old")).toBeInTheDocument();
+      expect(getUpdateCalls()).toHaveLength(0);
+    });
+
+    it("shows the placeholder again after typing only whitespace into an empty description", async () => {
+      setup({
+        dashboard: createMockDashboard({ id: 10, description: null }),
+      });
+
+      await userEvent.type(await startEditingDescription(), "  ");
+      await userEvent.tab();
+
+      expect(
+        await screen.findByPlaceholderText("No description"),
+      ).toBeInTheDocument();
+      expect(getUpdateCalls()).toHaveLength(0);
+    });
+
+    it("shows an error and the saved description when the description cannot be saved", async () => {
+      setup({
+        dashboard: createMockDashboard({ id: 10, description: "Old" }),
+        hasUpdateError: true,
+      });
+
+      await userEvent.type(await startEditingDescription(), " text");
+      await userEvent.tab();
+
+      const toast = await screen.findByRole("status");
+      expect(
+        within(toast).getByText("Failed to update dashboard description"),
+      ).toBeInTheDocument();
+      expect(await screen.findByText("Old")).toBeInTheDocument();
+      expect(screen.queryByText("Old text")).not.toBeInTheDocument();
+      expect(getUpdateCalls()).toHaveLength(1);
+
+      await userEvent.type(await startEditingDescription(), " text");
+      await userEvent.tab();
+
+      await waitFor(() => expect(getUpdateCalls()).toHaveLength(2));
+    });
+
+    it.each([
+      {
+        name: "the user cannot write the dashboard",
+        opts: {
+          dashboard: createMockDashboard({
+            id: 10,
+            description: "Revenue",
+            can_write: false,
+          }),
+        },
+      },
+      {
+        name: "the dashboard is in the trash",
+        opts: {
+          dashboard: createMockDashboard({
+            id: 10,
+            description: "Revenue",
+            archived: true,
+          }),
+        },
+      },
+      {
+        name: "remote sync is read-only",
+        opts: {
+          dashboard: createMockDashboard({ id: 10, description: "Revenue" }),
+          isRemoteSyncReadOnly: true,
+        },
+      },
+    ])("is read-only when $name", async ({ opts }) => {
+      setup(opts);
+
+      expect(await screen.findByText("Revenue")).toBeInTheDocument();
+      expect(screen.queryByTestId("editable-text")).not.toBeInTheDocument();
     });
   });
 
