@@ -74,6 +74,37 @@
       (is (empty? (#'athena/get-tables metadata schema "AwsDataCatalog")))
       (is (= ["AwsDataCatalog" expected "%" ["TABLE" "VIEW"]] @called)))))
 
+(deftest ^:parallel escape-metadata-pattern-blank-escape-test
+  (testing "a driver that reports no search escape string gets the name unchanged instead of an NPE"
+    (doseq [escape [nil ""]]
+      (let [metadata (reify DatabaseMetaData
+                       (getSearchStringEscape [_] escape))]
+        (is (= "database_name" (#'athena/escape-metadata-pattern metadata "database_name")))))))
+
+(deftest ^:parallel fast-active-tables-schema-pattern-test
+  (testing "getSchemas is scoped to the configured database instead of listing every database"
+    (doseq [[catalog dbname expected]
+            [[nil "database_name" [:catalog+pattern "AwsDataCatalog" "database\\_name"]]
+             ["" "database_name" [:catalog+pattern "AwsDataCatalog" "database\\_name"]]
+             ["ConfiguredCatalog" "database_name" [:catalog+pattern "ConfiguredCatalog" "database\\_name"]]
+             ["ConfiguredCatalog" nil [:catalog+pattern "ConfiguredCatalog" "%"]]
+             [nil nil [:all]]]]
+      (testing (str "catalog=" (pr-str catalog) ", dbname=" (pr-str dbname))
+        (let [called   (atom nil)
+              conn     (reify Connection
+                         (getCatalog [_] "AwsDataCatalog"))
+              metadata (reify DatabaseMetaData
+                         (getConnection [_] conn)
+                         (getSearchStringEscape [_] "\\")
+                         (getSchemas [_]
+                           (reset! called [:all])
+                           (empty-metadata-result-set))
+                         (getSchemas [_ catalog-arg pattern]
+                           (reset! called [:catalog+pattern catalog-arg pattern])
+                           (empty-metadata-result-set)))]
+          (is (= #{} (#'athena/fast-active-tables :athena metadata {:catalog catalog :dbname dbname})))
+          (is (= expected @called)))))))
+
 (driver/register! ::metadata-test :parent :athena)
 
 (defmethod sql-jdbc.execute/do-with-connection-with-options ::metadata-test

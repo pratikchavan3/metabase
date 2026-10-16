@@ -467,10 +467,20 @@
   [^DatabaseMetaData metadata entity-name]
   (when entity-name
     (let [escape (.getSearchStringEscape metadata)]
-      (-> entity-name
-          (str/replace escape (str escape escape))
-          (str/replace "_" (str escape "_"))
-          (str/replace "%" (str escape "%"))))))
+      (if (str/blank? escape)
+        entity-name
+        (-> entity-name
+            (str/replace escape (str escape escape))
+            (str/replace "_" (str escape "_"))
+            (str/replace "%" (str escape "%")))))))
+
+(defn- effective-catalog
+  "When a specific database is configured but no catalog is, use the connection's catalog instead of nil, so the
+  driver does not search every catalog."
+  [^Connection conn catalog dbname]
+  (if (and (str/blank? catalog) (not (str/blank? dbname)))
+    (.getCatalog conn)
+    catalog))
 
 (defn- get-columns
   [^DatabaseMetaData metadata catalog schema table-name]
@@ -523,9 +533,7 @@
      nil
      (fn [^Connection conn]
        (let [metadata (.getMetaData conn)
-             catalog  (if (and (str/blank? catalog) (not (str/blank? dbname)))
-                        (.getCatalog conn)
-                        catalog)]
+             catalog  (effective-catalog conn catalog dbname)]
          (assoc (select-keys table [:name :schema])
                 :fields (try
                           (describe-table-fields metadata database driver table catalog dbname)
@@ -575,20 +583,27 @@
   [driver ^DatabaseMetaData metadata {:keys [catalog dbname]}]
   ;; TODO: Catch errors here so a single exception doesn't fail the entire schema
   ;; Also we're creating a set here, so even if we set "ProxyAPI", we'll miss dupe database names
-  (with-open [rs (if catalog (.getSchemas metadata catalog "%") (.getSchemas metadata))]
-    ;; it seems like `table_catalog` is ALWAYS `AwsDataCatalog`. `table_schem` seems to correspond to the Database name,
-    ;; at least for stuff we create with the test data extensions?? :thinking_face:
-    (let [all-schemas (set (cond->> (jdbc/metadata-result rs)
-                             catalog (filter #(= (:table_catalog %) catalog))
-                             dbname  (filter #(= (:table_schem %) dbname))))
-          schemas     (set/difference all-schemas (sql-jdbc.sync/excluded-schemas driver))]
-      (set (for [schema schemas
-                 table  (get-tables metadata (:table_schem schema) (:table_catalog schema))]
-             (let [remarks (:remarks table)]
-               {:name        (:table_name table)
-                :schema      (when-not dbname (:table_schem schema))
-                :description (when-not (str/blank? remarks)
-                               remarks)}))))))
+  (let [catalog (effective-catalog (.getConnection metadata) catalog dbname)]
+    ;; When a single database is configured, ask the driver for just that database (escaped, so `_` is literal)
+    ;; instead of listing every database in the catalog and filtering client-side.
+    (with-open [rs (cond
+                     (not (str/blank? dbname)) (.getSchemas metadata catalog (escape-metadata-pattern metadata dbname))
+                     (not (str/blank? catalog)) (.getSchemas metadata catalog "%")
+                     :else                      (.getSchemas metadata))]
+      ;; it seems like `table_catalog` is ALWAYS `AwsDataCatalog`. `table_schem` seems to correspond to the Database
+      ;; name, at least for stuff we create with the test data extensions?? :thinking_face:
+      ;; The filters below stay as a safety net in case the driver treats the pattern loosely.
+      (let [all-schemas (set (cond->> (jdbc/metadata-result rs)
+                               (not (str/blank? catalog)) (filter #(= (:table_catalog %) catalog))
+                               (not (str/blank? dbname))  (filter #(= (:table_schem %) dbname))))
+            schemas     (set/difference all-schemas (sql-jdbc.sync/excluded-schemas driver))]
+        (set (for [schema schemas
+                   table  (get-tables metadata (:table_schem schema) (:table_catalog schema))]
+               (let [remarks (:remarks table)]
+                 {:name        (:table_name table)
+                  :schema      (when-not dbname (:table_schem schema))
+                  :description (when-not (str/blank? remarks)
+                                 remarks)})))))))
 
 (defmethod driver/describe-database* :athena
   [driver database]
